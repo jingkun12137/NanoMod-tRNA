@@ -1,0 +1,16 @@
+Metadata-Version: 2.1
+Name: NanoMod-tRNA
+Version: 0.9.6
+Summary: NanoMod-tRNA: Attention MIL with Adaptive Training Strategy for tRNA modification detection
+Home-page: https://github.com/jingkun12137/NanoMod-tRNA
+Author: Yi Jingkun
+Author-email: 1810305301@pku.edu.cn
+Classifier: Development Status :: 4 - Beta
+Classifier: Intended Audience :: Science/Research
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.7
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Topic :: Scientific/Engineering :: Bio-Informatics
+Requires-Python: >=3.7
