@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-"""NanoMod-tRNA Dataset Module v0.9.6 (Attention MIL)
+"""NanoMod-tRNA Dataset Module v0.9.6 (MIL with Noisy-OR pooling)
 
 This module implements the Multiple Instance Learning (MIL) dataset
 for tRNA modification detection.
