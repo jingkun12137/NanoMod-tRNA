@@ -1,9 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-"""NanoMod-tRNA Prediction Module v0.9.6 (Attention MIL)
+"""NanoMod-tRNA Prediction Module v0.9.6 (MIL with Noisy-OR pooling)
 
-This module implements tRNA modification prediction based on Attention MIL.
+This module implements tRNA modification prediction based on a MIL model with
+per-read classification and Noisy-OR pooling.
 It performs open-world prediction without requiring a candidate site list.
 
 Model Input:
@@ -47,7 +48,7 @@ def pure_predict(model_path, features_file, site_output_file,
                  num_instances=30, kmer_nums=781, hidden_dim=128,
                  num_workers=0, mod_type='D',
                  save_read_level=False, read_output_file=None):
-    """Attention MIL prediction function using a trained model.
+    """MIL prediction function using a trained model (per-read classifier + Noisy-OR pooling).
 
     Args:
         model_path: Path to trained model file.
@@ -162,8 +163,8 @@ def pure_predict(model_path, features_file, site_output_file,
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
     
-    # Initialize Attention MIL model
-    logger.info(f"Loading Attention MIL model from {model_path}")
+    # Initialize MIL model
+    logger.info(f"Loading MIL model from {model_path}")
     try:
         model = NanoMod(input_dim=6, hidden_dim=128, structure_emb_dim=16,
                        dropout_rate=0.3, num_instances=num_instances)
@@ -181,7 +182,7 @@ def pure_predict(model_path, features_file, site_output_file,
     model.eval()
     
     # Run predictions in mini-batches
-    logger.info("Running Attention MIL predictions...")
+    logger.info("Running MIL predictions...")
     site_preds = np.zeros((len(site_ids),), dtype=np.float32)
     read_level_rows = [] if save_read_level else None
     bs = 256  # Batch size for prediction
