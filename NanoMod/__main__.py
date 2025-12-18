@@ -5,7 +5,7 @@
 NanoMod-tRNA Main Module v0.9.6
 
 Main entry point for the NanoMod-tRNA package. Provides the following command-line interfaces:
-- train: Train the Attention MIL model with Adaptive Training Strategy and Structure-Aware Balancing.
+- train: Train the MIL model (per-read classifier + Noisy-OR pooling) with Adaptive Training Strategy and Structure-Aware Balancing.
 - predict: Predict tRNA modifications using a trained model.
 - mistake: Detect and analyze base mismatches in feature files.
 - modification: Analyze modification sites from modified and unmodified tRNA sequences.
@@ -34,7 +34,7 @@ logger = logging.getLogger('NanoMod')
 
 def main():
     """Main entry point for NanoMod-tRNA"""
-    parser = argparse.ArgumentParser(description='NanoMod-tRNA v0.9.6: Attention MIL with Adaptive Training Strategy and Structure-Aware Balancing for tRNA modification detection')
+    parser = argparse.ArgumentParser(description='NanoMod-tRNA v0.9.6: MIL (per-read classifier + Noisy-OR pooling) with Adaptive Training Strategy and Structure-Aware Balancing for tRNA modification detection')
     
     # Create subparsers for different commands
     subparsers = parser.add_subparsers(dest='command', help='Command to run')
@@ -47,7 +47,7 @@ def main():
     default_fasta = "NanoMod_data/yeast.tRNA.ext.fa"
     
     # Create the parser for the "train" command
-    train_parser = subparsers.add_parser('train', help='Train NanoMod-tRNA model (Attention MIL + Adaptive Training Strategy + Structure-Aware Balancing)')
+    train_parser = subparsers.add_parser('train', help='Train NanoMod-tRNA model (MIL with per-read classifier + Noisy-OR pooling + Adaptive Training Strategy + Structure-Aware Balancing)')
     train_parser.add_argument('--train-file', type=str, required=True,
                             help='Path to training features TSV file')
     train_parser.add_argument('--val-file', type=str, required=True,
@@ -85,7 +85,7 @@ def main():
                                  'otherwise use Mode B (hard labels)')
     
     # Create the parser for the "predict" command
-    predict_parser = subparsers.add_parser('predict', help='Predict tRNA modifications using trained Attention MIL model (open-world prediction, no candidate list required)')
+    predict_parser = subparsers.add_parser('predict', help='Predict tRNA modifications using trained MIL model (per-read classifier + Noisy-OR pooling; open-world prediction, no candidate list required)')
     predict_parser.add_argument('--features', type=str, required=True,
                              help='Path to features TSV file for prediction')
     predict_parser.add_argument('--model', type=str, default='NanoMod_model/best_model.pt',
@@ -150,7 +150,7 @@ def main():
             # Use v4-style Easy Ensemble training (default)
             from .train import train_model
             
-            logger.info("Starting NanoMod-tRNA training (Attention MIL with Adaptive Strategy + Structure-Aware Balancing)")
+            logger.info("Starting NanoMod-tRNA training (MIL with per-read classifier + Noisy-OR pooling; Adaptive Strategy + Structure-Aware Balancing)")
             model_path = train_model(
                 args.train_file, args.val_file, args.mod_site_file, 
                 args.output_dir,
