@@ -10,7 +10,7 @@ from setuptools import setup, find_packages
 setup(
     name="NanoMod-tRNA",
     version="0.9.6",
-    description="NanoMod-tRNA: Attention MIL with Adaptive Training Strategy for tRNA modification detection",
+    description="NanoMod-tRNA: MIL (per-read classifier + Noisy-OR pooling) with Adaptive Training Strategy for tRNA modification detection",
     author="Yi Jingkun",
     author_email="1810305301@pku.edu.cn",
     url="https://github.com/jingkun12137/NanoMod-tRNA",
