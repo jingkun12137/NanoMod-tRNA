@@ -1,10 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-"""NanoMod-tRNA Training Module v0.9.6 (Attention MIL with Adaptive Strategy + Structure-Aware Balancing)
+"""NanoMod-tRNA Training Module v0.9.6 (MIL with Noisy-OR pooling + Adaptive Strategy + Structure-Aware Balancing)
 
-This module trains an Attention-based Multiple Instance Learning (MIL) model
-with an adaptive training strategy and structure-aware balanced sampling.
+This module trains a Multiple Instance Learning (MIL) model with per-read
+classification and Noisy-OR pooling, together with an adaptive training strategy
+and structure-aware balanced sampling.
 
 Training modes:
 1. Mode A (high mismatch rate): Bayesian soft labels
@@ -23,7 +24,7 @@ Model architecture:
          (dtw.current, dtw.current_sd, dtw.length,
           dtw.amplitude, dtw.skewness, dtw.kurtosis).
 - tRNA structure embedding: 16-dimensional positional encoding.
-- Attention mechanism: learns importance weights for each read.
+- Per-read classifier + Noisy-OR pooling: aggregates per-read probabilities into a site-level probability.
 - Output: site-level modification probability.
 
 Structure-aware balanced sampling (added in v0.9.6):
@@ -128,7 +129,7 @@ def train_model(train_features_file, val_features_file, mod_sites_file,
                 num_instances=30, kmer_nums=781, dropout_rate=0.3,
                 num_workers=128, mod_type='D', mismatch_threshold=1.5):
     """
-    Train NanoMod-tRNA model with Attention MIL (Adaptive Strategy)
+    Train NanoMod-tRNA model with MIL (per-read classifier + Noisy-OR pooling; Adaptive Strategy)
     
     Args:
         train_features_file: Path to training features file
@@ -369,7 +370,7 @@ def train_model(train_features_file, val_features_file, mod_sites_file,
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
     
-    # Initialize Attention MIL model
+    # Initialize MIL model
     model = NanoMod(input_dim=6, hidden_dim=128, structure_emb_dim=16,
                    dropout_rate=dropout_rate, num_instances=num_instances)
     model = model.to(device)
@@ -773,7 +774,7 @@ def train_model(train_features_file, val_features_file, mod_sites_file,
 
 def main():
     """Main function for direct script execution"""
-    parser = argparse.ArgumentParser(description='NanoMod-tRNA training script (Attention MIL with Adaptive Strategy)')
+    parser = argparse.ArgumentParser(description='NanoMod-tRNA training script (MIL with per-read classifier + Noisy-OR pooling; Adaptive Strategy)')
     
     # Data parameters
     parser.add_argument('--train-file', type=str, required=True, help='Training feature file path')
