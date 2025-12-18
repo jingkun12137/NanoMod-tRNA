@@ -1,30 +1,26 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-"""NanoMod-tRNA Dataset Module v0.9.6 (MIL with Noisy-OR pooling)
+"""NanoMod-tRNA Model Module v0.9.6 (MIL with Noisy-OR pooling)
 
-This module implements the Multiple Instance Learning (MIL) dataset
-for tRNA modification detection.
-It preserves all reads per site and returns:
-- instances: [N, 6] tensor where N=num_reads (fixed at 30), 6=6 electrical signals
-- structure: categorical index (0-8) computed by classify_trna_structure(seq.pos)
-- mask: [N] boolean mask indicating valid reads (True) vs padding (False)
+This module implements a Multiple Instance Learning (MIL) model for tRNA
+modification detection.
 
-Padding strategy:
-- If reads < 30: pad with zeros and set mask=False for padded positions
-- If reads > 30: randomly sample 30 reads
+Model Architecture:
+- Input: [B, N, 6] where B=batch_size, N=num_reads (default 30), 6=electrical signal features
+- Instance Encoder: Encodes each read independently (6 → 128 dim)
+- Per-read classifier: Outputs per-read probabilities p_ij
+- Site-level aggregation: Noisy-OR pooling s_i = 1 - prod_j (1 - p_ij)
+- Output: [B,] site-level modification probability (0-1)
+
+Features:
+- 6 electrical signal features per read
+- tRNA structure embedding (16-dim) used as additional input to the per-read classifier
 """
 
-import numpy as np
-import pandas as pd
 import torch
-from torch.utils.data import Dataset, DataLoader
-import datatable as dt
-from itertools import product
-from typing import Dict, List, Tuple, Union, Optional
+import torch.nn as nn
 import logging
-import os
-from .utils import classify_trna_structure  # structure classification function
 
 # Set up logging
 logging.basicConfig(
@@ -36,200 +32,131 @@ logging.basicConfig(
 )
 logger = logging.getLogger('NanoMod')
 
-class MILDataset(Dataset):
-    def __init__(self, mode: str, features_file: str, mod_sites_file: str, 
-                 mod_type: str = 'D', num_reads: int = 30):
-        """MIL dataset: keep all reads per site (fixed to num_reads).
-        Each read has 6 electrical signal features.
-        
+
+class InstanceEncoder(nn.Module):
+    """Encodes each read (instance) independently."""
+    
+    def __init__(self, input_dim: int = 6, hidden_dim: int = 128, dropout_rate: float = 0.3):
+        """
         Args:
-            mode: 'Train' or 'Val'.
-            features_file: Path to features file.
-            mod_sites_file: Path to modification sites file.
-            mod_type: Modification type.
-            num_reads: Fixed number of reads per site (default: 30).
+            input_dim: Input feature dimension (6: 6 electrical signals)
+            hidden_dim: Output hidden dimension
+            dropout_rate: Dropout rate
         """
         super().__init__()
-        self.mode = mode
-        self.features_file = features_file
-        self.mod_sites_file = mod_sites_file
-        self.mod_type = mod_type
-        self.num_reads = num_reads
-
-        logger.info(f"Initializing {mode} MILDataset (preserving all reads, num_reads={num_reads}) ...")
-
-        # Read features
-        dt_data = dt.fread(features_file, sep='\t')
-        df = dt_data.to_pandas()
-
-        # Normalize names
-        if 'seq.name' not in df.columns or 'seq.pos' not in df.columns:
-            raise ValueError("features file must contain 'seq.name' and 'seq.pos'")
-        df['seq.name'] = df['seq.name'].astype(str).str.replace('T', 'U')
-        df['seq.pos'] = pd.to_numeric(df['seq.pos'], errors='coerce').fillna(0).astype(int)
-
-        # Required signal columns (6 dimensions, without 'mistake')
-        signal_cols = [
-            'dtw.current', 'dtw.current_sd', 'dtw.length',
-            'dtw.amplitude', 'dtw.skewness', 'dtw.kurtosis'
-        ]
-        
-        # Check 'mistake' column (used for mismatch rate and Bayesian model, not as model input)
-        if 'mistake' not in df.columns:
-            raise ValueError("features file must contain 'mistake' column")
-
-        # Convert to numeric and drop missing values
-        for col in signal_cols:
-            if col in df.columns:
-                df[col] = df[col].replace('*', np.nan)
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-            else:
-                raise ValueError(f"Missing required feature column: {col}")
-        
-        df['mistake'] = pd.to_numeric(df['mistake'], errors='coerce').fillna(0).astype(int)
-        df = df.dropna(subset=signal_cols)
-        
-        # Create site_id (must be done before storing mistake_data)
-        df['site_id'] = df['seq.name'].astype(str) + '_' + df['seq.pos'].astype(str)
-        
-        # Store 'mistake' column for mismatch rate calculation
-        self.mistake_data = df[['site_id', 'mistake']].copy()
-
-        # Read candidate modification sites file to build labels
-        cand_df = pd.read_csv(mod_sites_file, sep='\t')
-        cand_df['trna_combined'] = cand_df['trna_combined'].astype(str).str.replace('T', 'U')
-        cand_df = cand_df[cand_df['modified_base'].astype(str) == str(mod_type)].copy()
-        cand_df['position'] = pd.to_numeric(cand_df['position'], errors='coerce').fillna(0).astype(int)
-        cand_df['site_id'] = cand_df['trna_combined'].astype(str) + '_' + cand_df['position'].astype(str)
-        self.cand_ids = set(cand_df['site_id'].unique())
-        
-        logger.info(f"  Loaded {len(self.cand_ids)} candidate modification sites from {mod_sites_file}")
-
-        # Group by site and keep all reads
-        grouped = df.groupby(['site_id', 'seq.name', 'seq.pos'])
-        
-        self.site_ids = []
-        self.seq_names = []
-        self.seq_positions = []
-        self.structures = []
-        self.instances_list = []  # reads per site
-        self.masks_list = []  # mask per site
-        
-        for (site_id, seq_name, seq_pos), group in grouped:
-            # Extract 6D features: 6 signal dimensions only (without 'mistake')
-            features = group[signal_cols].values.astype(np.float32)  # [actual_reads, 6]
-            actual_num_reads = len(features)
-            
-            # Handle reads count
-            if actual_num_reads > num_reads:
-                # Randomly sample num_reads reads
-                indices = np.random.choice(actual_num_reads, num_reads, replace=False)
-                features = features[indices]
-                mask = np.ones(num_reads, dtype=bool)
-            elif actual_num_reads < num_reads:
-                # Zero padding
-                padded = np.zeros((num_reads, 6), dtype=np.float32)
-                padded[:actual_num_reads, :] = features
-                features = padded
-                mask = np.zeros(num_reads, dtype=bool)
-                mask[:actual_num_reads] = True
-            else:
-                # Exactly num_reads reads
-                mask = np.ones(num_reads, dtype=bool)
-            
-            # Structure classification
-            structure = classify_trna_structure(seq_pos)
-            structure = int(np.clip(structure, 0, 8))
-            
-            # Save
-            self.site_ids.append(site_id)
-            self.seq_names.append(seq_name)
-            self.seq_positions.append(seq_pos)
-            self.structures.append(structure)
-            self.instances_list.append(features)  # [num_reads, 6]
-            self.masks_list.append(mask)  # [num_reads]
-        
-        logger.info(f"{mode} MILDataset built with {len(self.site_ids)} sites, "
-                    f"each with {num_reads} reads (6 features per read)")
-
-    def __len__(self):
-        return len(self.site_ids)
-
-    def __getitem__(self, idx):
-        instances = torch.from_numpy(self.instances_list[idx])  # [num_reads, 6]
-        structure = torch.tensor(self.structures[idx], dtype=torch.long)
-        mask = torch.from_numpy(self.masks_list[idx])  # [num_reads]
-        site_id = self.site_ids[idx]
-        
-        # Generate label based on whether site_id is in candidate set
-        # 1.0 = in candidate file (potentially modified), 0.0 = not in candidate file (unmodified)
-        y = torch.tensor(1.0 if site_id in self.cand_ids else 0.0, dtype=torch.float32)
-        
-        out = {
-            'instances': instances,
-            'structure': structure,
-            'mask': mask,
-            'site_id': site_id,
-        }
-        return out, y
-
-def create_dataloaders(train_features_file, val_features_file, mod_sites_file, 
-                      batch_size=256, num_instances=30, num_workers=128,
-                      use_preprocessed=True, preprocessed_dir="NanoMod_tmp", mod_type='D'):
-    """
-    Create train and validation dataloaders for MIL
+        self.encoder = nn.Sequential(
+            nn.Linear(input_dim, 64),
+            nn.ReLU(),
+            nn.Dropout(p=dropout_rate),
+            nn.Linear(64, hidden_dim),
+            nn.ReLU(),
+        )
     
-    Args:
-        train_features_file: Path to training features file
-        val_features_file: Path to validation features file
-        mod_sites_file: Path to known modification sites file
-        batch_size: Batch size (default: 256)
-        num_instances: Number of reads per site (default: 30)
-        num_workers: Number of worker threads for data loading (default: 128)
-        use_preprocessed: Unused, kept for compatibility
-        preprocessed_dir: Unused, kept for compatibility
-        mod_type: Modification type (default: 'D')
+    def forward(self, instances):
+        """
+        Args:
+            instances: [B, N, 6] or [N, 6]
+        Returns:
+            [B, N, hidden_dim] or [N, hidden_dim]
+        """
+        return self.encoder(instances)
+
+class ReadClassifier(nn.Module):
+    """Per-read classifier to obtain p_ij from instance features."""
+
+    def __init__(self, hidden_dim: int = 128, dropout_rate: float = 0.3):
+        """
+        Args:
+            hidden_dim: Input feature dimension
+            dropout_rate: Dropout rate
+        """
+        super().__init__()
+        self.head = nn.Sequential(
+            nn.Linear(hidden_dim, 64),
+            nn.ReLU(),
+            nn.Dropout(p=dropout_rate),
+            nn.Linear(64, 1),
+            nn.Sigmoid()
+        )
+
+    def forward(self, instance_features):
+        """
+        Args:
+            instance_features: [B, N, hidden_dim]
+        Returns:
+            read_probs: [B, N]
+        """
+        return self.head(instance_features).squeeze(-1)
+
+
+class NanoMod(nn.Module):
+    """EM (Noisy-OR) model for modification detection."""
+
+    def __init__(self, input_dim: int = 6, hidden_dim: int = 128, 
+                 structure_emb_dim: int = 16, dropout_rate: float = 0.3, 
+                 kmer_nums=None, num_instances: int = 30):
+        """
+        Args:
+            input_dim: Input feature dimension per read (default: 6)
+            hidden_dim: Hidden dimension for instance encoder (default: 128)
+            structure_emb_dim: Unused, kept for compatibility
+            dropout_rate: Dropout rate (default: 0.3)
+            kmer_nums: Unused, kept for compatibility
+            num_instances: Number of reads per site (default: 30)
+        """
+        super().__init__()
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        self.num_instances = num_instances
+        self.kmer_nums = kmer_nums  # Keep for compatibility
         
-    Returns:
-        Tuple of (train_loader, val_loader, train_dataset, val_dataset)
-    """
-    # MIL collate: keep instances, masks, and site_ids
-    def custom_collate_fn(batch):
-        inputs = [item[0] for item in batch]
-        labels = [item[1] for item in batch]
-
-        instances = torch.stack([x['instances'] for x in inputs], dim=0)  # [B, N, 6]
-        struct = torch.stack([x['structure'] for x in inputs], dim=0)  # [B]
-        masks = torch.stack([x['mask'] for x in inputs], dim=0)  # [B, N]
-        site_ids = [x['site_id'] for x in inputs]
-
-        batch_data = {
-            'instances': instances,
-            'structure': struct,
-            'mask': masks,
-            'site_ids': site_ids,
-        }
-        batch_labels = torch.stack(labels)
-        return batch_data, batch_labels
+        # Components: per-read encoder + per-read classifier; Noisy-OR aggregator in forward
+        self.instance_encoder = InstanceEncoder(input_dim, hidden_dim, dropout_rate)
+        # Structure embedding (0-8)
+        self.structure_embedding = nn.Embedding(9, structure_emb_dim)
+        # Read classifier now consumes [hidden_dim + structure_emb_dim]
+        self.read_classifier = ReadClassifier(hidden_dim + structure_emb_dim, dropout_rate)
+        
+        logger.info(f"Initialized EM (Noisy-OR) model (no structure info): input_dim={input_dim}, "
+                   f"hidden_dim={hidden_dim}, num_instances={num_instances}")
     
-    # 创建MIL数据集
-    logger.info(f"Creating training MILDataset (num_reads={num_instances})...")
-    train_dataset = MILDataset(mode="Train", features_file=train_features_file, 
-                               mod_sites_file=mod_sites_file, mod_type=mod_type, 
-                               num_reads=num_instances)
+    def forward(self, x, return_attention=False, return_read_probs=False):
+        """
+        Args:
+            x: dict with keys:
+                - 'instances': [B, N, 6] read features
+                - 'structure': [B] structure index (unused, kept for compatibility)
+                - 'mask': [B, N] optional, boolean mask for valid instances
+            return_attention: Unused (kept for compatibility)
+        Returns:
+            prob: [B] probability
+        """
+        instances = x['instances']  # [B, N, 6]
+        structure = x['structure']  # [B]
+        mask = x.get('mask', None)  # [B, N] optional
 
-    logger.info(f"Creating validation MILDataset (num_reads={num_instances})...")
-    val_dataset = MILDataset(mode="Val", features_file=val_features_file, 
-                             mod_sites_file=mod_sites_file, mod_type=mod_type, 
-                             num_reads=num_instances)
-    
-    # Create dataloaders
-    logger.info(f"Creating DataLoader with batch_size={batch_size}, num_workers={num_workers}")
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, 
-                            num_workers=num_workers, pin_memory=True, collate_fn=custom_collate_fn)
+        # 1. Encode each read
+        instance_features = self.instance_encoder(instances)  # [B, N, hidden_dim]
 
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, 
-                          num_workers=num_workers, pin_memory=True, collate_fn=custom_collate_fn)
-    
-    logger.info("DataLoaders created successfully.")
-    return train_loader, val_loader, train_dataset, val_dataset
+        # 2. Concatenate structure embedding to each read feature
+        structure_emb = self.structure_embedding(structure)  # [B, structure_emb_dim]
+        structure_emb = structure_emb.unsqueeze(1).expand(-1, instance_features.size(1), -1)  # [B, N, structure_emb_dim]
+        combined_features = torch.cat([instance_features, structure_emb], dim=-1)  # [B, N, hidden_dim + structure_emb_dim]
+
+        # 3. Per-read probabilities
+        read_probs = self.read_classifier(combined_features)  # [B, N]
+        if mask is not None:
+            # Invalidate padded reads by setting p=0 so they do not affect Noisy-OR
+            read_probs = read_probs.masked_fill(~mask, 0.0)
+
+        # 4. Noisy-OR aggregation: s_i = 1 - prod_j (1 - p_ij)
+        one_minus_p = 1.0 - read_probs.clamp(0.0, 1.0)
+        # Stable product via log-sum
+        log_prod = torch.log(one_minus_p + 1e-12).sum(dim=1)
+        prod = torch.exp(log_prod)
+        prob = (1.0 - prod).clamp(0.0, 1.0)
+
+        if return_read_probs:
+            return prob, read_probs
+
+        return prob
