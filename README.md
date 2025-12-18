@@ -1,10 +1,10 @@
 # NanoMod-tRNA v0.9.6
 
-NanoMod-tRNA is a tRNA modification detection tool based on Attention MIL, Adaptive Training Strategy, and Structure-Aware Balancing.
+NanoMod-tRNA is a tRNA modification detection tool based on Multiple Instance Learning (MIL) with per-read classification + Noisy-OR pooling, Adaptive Training Strategy, and Structure-Aware Balancing.
 
 ## Key Features
 
-- **Attention MIL**: Keeps all reads for each site (30 by default) and uses an attention mechanism to automatically learn the importance of each read.
+- **MIL with Noisy-OR pooling**: Keeps all reads for each site (30 by default), predicts per-read modification probabilities, and aggregates them into a site-level probability using Noisy-OR pooling.
 - **Adaptive Training Strategy**: Automatically selects the optimal training mode based on mismatch rates.
   - **Mode A (high mismatch rate)**: Uses Bayesian soft labels; applied when the mismatch rate at candidate sites is > 1.5 × the global mismatch rate.
   - **Mode B (low mismatch rate)**: Uses hard labels; applied when mismatch rate differences are not significant.
@@ -96,9 +96,9 @@ Arguments:
 
 ### 3) Model training (train)
 
-Attention MIL + Adaptive Training Strategy + Structure-Aware Balancing:
+MIL (per-read classifier + Noisy-OR pooling) + Adaptive Training Strategy + Structure-Aware Balancing:
 - **Input features**: 30 reads per site are kept; each read has 6 electrical signal features.
-- **Attention mechanism**: Automatically learns the importance weight of each read.
+- **Noisy-OR pooling**: Converts per-read probabilities into a site-level probability.
 - **tRNA structure embedding**: 16-dimensional positional encoding.
 - **Adaptive Training Strategy**:
   - **Mismatch rate analysis**: Automatically computes mismatch rates for candidate sites and globally.
@@ -146,7 +146,7 @@ Arguments:
 
 ### 4) Model prediction (predict)
 
-Use a trained Attention MIL model to predict tRNA modifications:
+Use a trained MIL model (per-read classifier + Noisy-OR pooling) to predict tRNA modifications:
 - **Open-world prediction**: No candidate list is required; prediction is performed on all sites.
 - **Outputs**: Site-level modification probability TSV and optional read-level probability TSV.
 
