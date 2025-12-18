@@ -277,7 +277,7 @@ def classify_trna_structure(position):
 
 def visualize_attention_weights(model, dataset, output_dir, num_samples=10):
     """
-    Visualize attention weights for selected samples
+    Visualize attention weights for selected samples (only applicable to models that expose attention weights)
     
     Parameters:
         model (torch.nn.Module): Trained model
@@ -285,7 +285,7 @@ def visualize_attention_weights(model, dataset, output_dir, num_samples=10):
         output_dir (str): Output directory
         num_samples (int): Number of samples to visualize
     """
-    print("Visualizing attention weights...")
+    print("Visualizing attention weights (requires an attention-based model)...")
     os.makedirs(output_dir, exist_ok=True)
     
     # Get feature names
